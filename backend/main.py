@@ -1,40 +1,15 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import joblib
 import pandas as pd
 from typing import List
 import io
+import traceback
 
-# Load the trained model
-model = joblib.load("house_price_model.joblib")
-
-# Directly hardcoded list of features used in training
-feature_columns = [
-    'Id', 'MSSubClass', 'MSZoning', 'LotFrontage', 'LotArea', 'Street',
-        'LotShape', 'LandContour', 'Utilities', 'LotConfig',
-       'LandSlope', 'Neighborhood', 'Condition1', 'Condition2', 'BldgType',
-       'HouseStyle', 'OverallQual', 'OverallCond', 'YearBuilt', 'YearRemodAdd',
-       'RoofStyle', 'RoofMatl', 'Exterior1st', 'Exterior2nd', 'MasVnrType',
-       'MasVnrArea', 'ExterQual', 'ExterCond', 'Foundation', 'BsmtQual',
-       'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinSF1',
-       'BsmtFinType2', 'BsmtFinSF2', 'BsmtUnfSF', 'TotalBsmtSF', 'Heating',
-       'HeatingQC', 'CentralAir', 'Electrical', '1stFlrSF', '2ndFlrSF',
-       'LowQualFinSF', 'GrLivArea', 'BsmtFullBath', 'BsmtHalfBath', 'FullBath',
-       'HalfBath', 'BedroomAbvGr', 'KitchenAbvGr', 'KitchenQual',
-       'TotRmsAbvGrd', 'Functional', 'Fireplaces', 'FireplaceQu', 'GarageType',
-       'GarageYrBlt', 'GarageFinish', 'GarageCars', 'GarageArea', 'GarageQual',
-       'GarageCond', 'PavedDrive', 'WoodDeckSF', 'OpenPorchSF',
-       'EnclosedPorch', '3SsnPorch', 'ScreenPorch', 'PoolArea',
-        'MiscVal', 'MoSold', 'YrSold', 'SaleType',
-       'SaleCondition'
-]
-
-
-# Initialize FastAPI app
 app = FastAPI()
 
-# Allow frontend requests (CORS setup)
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -43,7 +18,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# For single prediction
+# Try loading the model and log any failure
+try:
+    model = joblib.load("house_price_model.joblib")
+    print("Model loaded successfully.")
+except Exception as e:
+    print("Error loading model:", e)
+    traceback.print_exc()
+    model = None
+
+# Feature columns
+feature_columns = [
+    'Id', 'MSSubClass', 'MSZoning', 'LotFrontage', 'LotArea', 'Street',
+    'LotShape', 'LandContour', 'Utilities', 'LotConfig', 'LandSlope', 'Neighborhood',
+    'Condition1', 'Condition2', 'BldgType', 'HouseStyle', 'OverallQual', 'OverallCond',
+    'YearBuilt', 'YearRemodAdd', 'RoofStyle', 'RoofMatl', 'Exterior1st', 'Exterior2nd',
+    'MasVnrType', 'MasVnrArea', 'ExterQual', 'ExterCond', 'Foundation', 'BsmtQual',
+    'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinSF1', 'BsmtFinType2',
+    'BsmtFinSF2', 'BsmtUnfSF', 'TotalBsmtSF', 'Heating', 'HeatingQC', 'CentralAir',
+    'Electrical', '1stFlrSF', '2ndFlrSF', 'LowQualFinSF', 'GrLivArea', 'BsmtFullBath',
+    'BsmtHalfBath', 'FullBath', 'HalfBath', 'BedroomAbvGr', 'KitchenAbvGr',
+    'KitchenQual', 'TotRmsAbvGrd', 'Functional', 'Fireplaces', 'FireplaceQu',
+    'GarageType', 'GarageYrBlt', 'GarageFinish', 'GarageCars', 'GarageArea',
+    'GarageQual', 'GarageCond', 'PavedDrive', 'WoodDeckSF', 'OpenPorchSF',
+    'EnclosedPorch', '3SsnPorch', 'ScreenPorch', 'PoolArea', 'MiscVal', 'MoSold',
+    'YrSold', 'SaleType', 'SaleCondition'
+]
+
+# Schema
 class HouseData(BaseModel):
     Id: int
     MSSubClass: int
@@ -122,36 +124,60 @@ class HouseData(BaseModel):
     SaleType: str
     SaleCondition: str
 
-# Prediction for single instance
 @app.post("/predict")
 def predict_price(data: HouseData):
-    df = pd.DataFrame([data.dict()])
-    df = df.rename(columns={
-        "FirstFlrSF": "1stFlrSF",
-        "SecondFlrSF": "2ndFlrSF",
-        "ThreeSsnPorch": "3SsnPorch"
-    })
+    if model is None:
+        raise HTTPException(status_code=500, detail="Model not loaded")
 
-    df = pd.get_dummies(df)
-    df = df.reindex(columns=feature_columns, fill_value=0)
+    try:
+        input_dict = data.dict()
+        print("Input data received:", input_dict)
 
-    prediction = model.predict(df)[0]
-    return {"predicted_price": round(prediction, 2)}
+        df = pd.DataFrame([input_dict])
+        df.rename(columns={
+            "FirstFlrSF": "1stFlrSF",
+            "SecondFlrSF": "2ndFlrSF",
+            "ThreeSsnPorch": "3SsnPorch"
+        }, inplace=True)
 
-# Prediction for uploaded CSV
+        df = pd.get_dummies(df)
+        df = df.reindex(columns=feature_columns, fill_value=0)
+        print("Processed DataFrame columns:", df.columns.tolist())
+
+        prediction = model.predict(df)[0]
+        print("Prediction:", prediction)
+
+        return {"predicted_price": round(prediction, 2)}
+    except Exception as e:
+        print("Error during prediction:", e)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Prediction failed")
+
 @app.post("/predict-csv")
 async def predict_from_csv(file: UploadFile = File(...)):
-    contents = await file.read()
-    df = pd.read_csv(io.BytesIO(contents))
+    if model is None:
+        raise HTTPException(status_code=500, detail="Model not loaded")
 
-    df = df.rename(columns={
-        "FirstFlrSF": "1stFlrSF",
-        "SecondFlrSF": "2ndFlrSF",
-        "ThreeSsnPorch": "3SsnPorch"
-    })
+    try:
+        contents = await file.read()
+        df = pd.read_csv(io.BytesIO(contents))
+        print("CSV columns before rename:", df.columns.tolist())
 
-    df = pd.get_dummies(df)
-    df = df.reindex(columns=feature_columns, fill_value=0)
+        df.rename(columns={
+            "FirstFlrSF": "1stFlrSF",
+            "SecondFlrSF": "2ndFlrSF",
+            "ThreeSsnPorch": "3SsnPorch"
+        }, inplace=True)
 
-    df["PredictedPrice"] = model.predict(df)
-    return df[["PredictedPrice"]].to_dict(orient="records")
+        df = pd.get_dummies(df)
+        df = df.reindex(columns=feature_columns, fill_value=0)
+
+        predictions = model.predict(df)
+        print("Predictions for CSV:", predictions)
+
+        df["PredictedPrice"] = predictions
+        return df[["PredictedPrice"]].to_dict(orient="records")
+    except Exception as e:
+        print("Error processing CSV:", e)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="CSV Prediction failed")
